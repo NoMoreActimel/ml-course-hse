@@ -6,6 +6,7 @@ import numpy as np
 
 from preprocessing import TokenizedSentencePair
 
+EPS = 1e-16
 
 class BaseAligner(ABC):
     """
@@ -86,7 +87,15 @@ class WordAligner(BaseAligner):
             posteriors: list of np.arrays with shape (src_len, target_len). posteriors[i][j][k] gives a posterior
             probability of target token k to be aligned to source token j in a sentence i.
         """
-        pass
+        # posteriors[p][i] = theta[src, trg] / (sum_{s in src} theta[s, trg])
+        posteriors = []
+        
+        for sentence in parallel_corpus:
+            source, target = sentence.source_tokens, sentence.target_tokens
+            probs = self.translation_probs[np.ix_(source, target)]
+            posteriors.append(probs / np.sum(probs, axis=0))
+
+        return posteriors
 
     def _compute_elbo(self, parallel_corpus: List[TokenizedSentencePair], posteriors: List[np.array]) -> float:
         """
@@ -100,8 +109,16 @@ class WordAligner(BaseAligner):
         Returns:
             elbo: the value of evidence lower bound
         """
-        pass
-
+        elbo = 0.
+         
+        for i, sentence in enumerate(parallel_corpus):
+            source, target = sentence.source_tokens, sentence.target_tokens
+            m, n = len(target), len(source)
+            probs = self.translation_probs[np.ix_(source, target)]
+            elbo += np.sum(posteriors[i] * (np.log(probs + EPS) - np.log(posteriors[i] + EPS))) - m * np.log(n)
+        
+        return elbo
+                     
     def _m_step(self, parallel_corpus: List[TokenizedSentencePair], posteriors: List[np.array]):
         """
         Update model parameters from a parallel corpus and posterior alignment distribution. Also, compute and return
@@ -114,8 +131,17 @@ class WordAligner(BaseAligner):
         Returns:
             elbo:  the value of evidence lower bound after applying parameter updates
         """
-        pass
+        self.translation_probs[:, :] = 0.                   
+                           
+        for i, sentence in enumerate(parallel_corpus):
+            source, target = sentence.source_tokens, sentence.target_tokens
+            np.add.at(self.translation_probs, np.ix_(source, target), posteriors[i])
+        
+        self.translation_probs /= np.sum(self.translation_probs, axis=1, keepdims=True)
+                           
+        return self._compute_elbo(parallel_corpus, posteriors)
 
+                           
     def fit(self, parallel_corpus):
         """
         Same as in the base class, but keep track of ELBO values to make sure that they are non-decreasing.
@@ -134,8 +160,16 @@ class WordAligner(BaseAligner):
             history.append(elbo)
         return history
 
+    
     def align(self, sentences):
-        pass
+        alignments = []
+        
+        for sentence in sentences:
+            source, target = sentence.source_tokens, sentence.target_tokens
+            aligned_source_tokens = np.argmax(self.translation_probs[np.ix_(source, target)], axis=0)
+            alignments.append([(j + 1, i + 1) for i, j in enumerate(aligned_source_tokens)])
+    
+        return alignments
 
 
 class WordPositionAligner(WordAligner):
@@ -156,13 +190,59 @@ class WordPositionAligner(WordAligner):
         Returns:
             probs_for_lengths: np.array with shape (src_length, tgt_length)
         """
-        pass
+        probs = self.alignment_probs.get((src_length, tgt_length), None)
+        
+        if probs is None:
+            self.alignment_probs[(src_length, tgt_length)] = \
+                np.full((src_length, tgt_length), 1 / src_length, dtype=np.float32)
+            probs = self.alignment_probs[(src_length, tgt_length)]
+        
+        return probs 
 
     def _e_step(self, parallel_corpus):
-        pass
+        posteriors = []
+        
+        for sentence in parallel_corpus:
+            source, target = sentence.source_tokens, sentence.target_tokens
+            alignment_probs = self._get_probs_for_lengths(len(source), len(target))
+            probs = self.translation_probs[np.ix_(source, target)] * alignment_probs
+            posteriors.append(probs / np.sum(probs, axis=0))
+
+        return posteriors
 
     def _compute_elbo(self, parallel_corpus, posteriors):
-        pass
-
+        elbo = 0.
+         
+        for i, sentence in enumerate(parallel_corpus):
+            source, target = sentence.source_tokens, sentence.target_tokens
+            
+            translation_probs = self.translation_probs[np.ix_(source, target)]
+            alignment_probs = self._get_probs_for_lengths(len(source), len(target))
+            
+            elbo += np.sum(posteriors[i] * (np.log(translation_probs + EPS) + 
+                                            np.log(alignment_probs + EPS) - 
+                                            np.log(posteriors[i] + EPS)))
+        
+        return elbo
+    
     def _m_step(self, parallel_corpus, posteriors):
-        pass
+        self.translation_probs[:, :] = 0.          
+        
+        for key in self.alignment_probs.keys():
+            self.alignment_probs[key][:, :] = 0.
+                           
+        for i, sentence in enumerate(parallel_corpus):
+            source, target = sentence.source_tokens, sentence.target_tokens
+            np.add.at(self.translation_probs, np.ix_(source, target), posteriors[i])
+            
+            if (len(source), len(target)) not in self.alignment_probs:
+                self.alignment_probs[(len(source), len(target))] = np.zeros((len(source), len(target)))
+                
+            self.alignment_probs[(len(source), len(target))] += posteriors[i]
+        
+        self.translation_probs /= np.sum(self.translation_probs, axis=1, keepdims=True) # row-wise
+           
+        for key in self.alignment_probs.keys():
+            self.alignment_probs[key] /= np.sum(self.alignment_probs[key], axis=0) # column-wise
+                           
+        return self._compute_elbo(parallel_corpus, posteriors)

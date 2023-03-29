@@ -18,7 +18,19 @@ def compute_precision(reference: List[LabeledAlignment], predicted: List[List[Tu
         intersection: number of alignments that are both in predicted and possible sets, summed over all sentences
         total_predicted: total number of predicted alignments over all sentences
     """
-    pass
+    
+    intersection = 0
+    total_predicted = 0
+    
+    for ref_align, pred_align in zip(reference, predicted):
+#         intersection += sum(1 for alignment in set(pred_align) if alignment in possible_align_set)
+        possible_align_set = set(ref_align.sure + ref_align.possible)
+        prediced_align_set = set(pred_align)
+        
+        intersection += len(possible_align_set.intersection(prediced_align_set))
+        total_predicted += len(prediced_align_set)
+        
+    return intersection, total_predicted
 
 
 def compute_recall(reference: List[LabeledAlignment], predicted: List[List[Tuple[int, int]]]) -> Tuple[int, int]:
@@ -33,9 +45,21 @@ def compute_recall(reference: List[LabeledAlignment], predicted: List[List[Tuple
 
     Returns:
         intersection: number of alignments that are both in predicted and sure sets, summed over all sentences
-        total_predicted: total number of sure alignments over all sentences
+        total_sure: total number of sure alignments over all sentences
     """
-    pass
+    
+    intersection = 0
+    total_sure = 0
+    
+    for ref_align, pred_align in zip(reference, predicted):
+#         intersection += sum(1 for alignment in set(pred_align) if alignment in sure_align_set)
+        sure_align_set = set(ref_align.sure)
+        prediced_align_set = set(pred_align)
+
+        intersection += len(sure_align_set.intersection(prediced_align_set))
+        total_sure += len(sure_align_set)
+        
+    return intersection, total_sure
 
 
 def compute_aer(reference: List[LabeledAlignment], predicted: List[List[Tuple[int, int]]]) -> float:
@@ -51,4 +75,7 @@ def compute_aer(reference: List[LabeledAlignment], predicted: List[List[Tuple[in
     Returns:
         aer: the alignment error rate
     """
-    pass
+    prec_intersection, prec_total = compute_precision(reference, predicted)
+    recall_intersection, recall_total = compute_recall(reference, predicted)
+          
+    return 1 - (prec_intersection + recall_intersection) / (prec_total + recall_total)
